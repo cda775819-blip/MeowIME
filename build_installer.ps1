@@ -20,6 +20,14 @@ Copy-Item (Join-Path $root 'rime.dll') (Join-Path $staging 'rime.dll') -Force
 Copy-Item (Join-Path $root 'rime_data') (Join-Path $staging 'rime_data') -Recurse -Force
 Copy-Item (Join-Path $root 'rime_user\build\*') (Join-Path $staging 'rime_user\build') -Recurse -Force
 
+# 2.5 第三方许可证声明
+# 包里分发了 librime（BSD-3-Clause）和 Rime 方案/词典数据（LGPL-3.0），
+# 两份许可证都要求随二进制附带版权声明与许可证全文，缺了就是侵权。
+# 安装器会把它们一起释放到安装目录，用户能直接查到。
+Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.txt') $staging -Force
+Copy-Item (Join-Path $root 'LICENSE')                $staging -Force
+Copy-Item (Join-Path $root 'licenses')               $staging -Recurse -Force
+
 # 3. enumerate files, build manifest + rc
 $files = Get-ChildItem $staging -Recurse -File
 $sb = New-Object System.Text.StringBuilder

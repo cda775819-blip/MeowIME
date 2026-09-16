@@ -58,6 +58,36 @@ static bool ExtractResource(HINSTANCE hInst, LPCWSTR resName, const std::wstring
     return ok && written == size;
 }
 
+// 释放文件；目标被占用时自动换一个带序号的文件名。
+//
+// 为什么需要：正在运行的程序会锁住已加载的 DLL，此时覆盖必然
+// ERROR_SHARING_VIOLATION。以前这里直接报"释放文件失败：CatTextService.dll"
+// 就中止了 —— 用户看到这句话完全不知道发生了什么（升级时必现）。
+// 换成 CatTextService.1.dll / .2.dll ... 落盘即可：注册表指向哪个文件
+// 是由我们决定的，换了名字照样注册成功，用户不用去关程序。
+static bool ExtractWithFallback(HINSTANCE hInst, LPCWSTR resName,
+                                const std::wstring& outPath, std::wstring& actualPath)
+{
+    if (ExtractResource(hInst, resName, outPath)) { actualPath = outPath; return true; }
+
+    // 只有带扩展名的文件才换名（目录名上加序号没有意义）
+    size_t dot = outPath.find_last_of(L'.');
+    size_t slash = outPath.find_last_of(L"\\/");
+    if (dot == std::wstring::npos || (slash != std::wstring::npos && dot < slash))
+        return false;
+
+    const std::wstring stem = outPath.substr(0, dot);
+    const std::wstring ext  = outPath.substr(dot);
+    for (int i = 1; i <= 8; i++)
+    {
+        wchar_t suffix[16];
+        swprintf_s(suffix, L".%d", i);
+        const std::wstring cand = stem + suffix + ext;
+        if (ExtractResource(hInst, resName, cand)) { actualPath = cand; return true; }
+    }
+    return false;
+}
+
 // 读取内嵌的文件清单（UTF-8，每行 "资源名=相对路径"）
 static std::wstring LoadList(HINSTANCE hInst)
 {
@@ -202,31 +232,42 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     }
 
     std::wstring failPath;
+    // 输入法 DLL 实际落盘的名字。被占用时会换成 CatTextService.N.dll，
+    // 注册必须指向真正写成功的那个文件，否则注册了也加载不到。
+    std::wstring dllPath = g_installDir + L"\\CatTextService.dll";
     for (auto& e : entries)
     {
-        std::wstring target = g_installDir + L"\\" + e.second;
-        if (!ExtractResource(hInst, e.first.c_str(), target))
+        const std::wstring target = g_installDir + L"\\" + e.second;
+        std::wstring actual;
+        if (!ExtractWithFallback(hInst, e.first.c_str(), target, actual))
         {
             failPath = e.second;
             break;
         }
+        if (_wcsicmp(e.second.c_str(), L"CatTextService.dll") == 0)
+            dllPath = actual;
     }
 
     if (!failPath.empty())
     {
-        MessageBoxW(NULL, (L"释放文件失败：" + failPath).c_str(), L"喵喵助手", MB_OK | MB_ICONERROR);
+        std::wstring msg = L"释放文件失败：" + failPath +
+                           L"\n\n多半是某个程序正锁着旧文件。\n"
+                           L"关掉聊天软件 / 浏览器 / 资源管理器后重试，"
+                           L"或者先注销一次再装。";
+        MessageBoxW(NULL, msg.c_str(), L"喵喵助手", MB_OK | MB_ICONERROR);
         return 1;
     }
 
-    // 注册 TSF
-    HRESULT hr = RegisterDll(g_installDir + L"\\CatTextService.dll", false);
+    // 注册 TSF（指向实际落盘的那个 DLL）
+    HRESULT hr = RegisterDll(dllPath, false);
     RestartInputHost();
 
     if (SUCCEEDED(hr))
     {
         std::wstring msg = L"喵喵助手安装完成！\n\n"
                            L"请在系统设置 -> 时间和语言 -> 语言和区域 中添加中文输入法：\n"
-                           L"喵喵助手。\n\n安装位置：\n" + g_installDir;
+                           L"喵喵助手。\n\n安装位置：\n" + g_installDir +
+                           L"\n\n第三方组件许可见安装目录下的 THIRD-PARTY-NOTICES.txt";
         MessageBoxW(NULL, msg.c_str(), L"喵喵助手", MB_OK | MB_ICONINFORMATION);
     }
     else

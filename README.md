@@ -141,14 +141,31 @@ docs/改造前后对比.md     详细的改造记录（含实测证据与方法�
 
 ## 第三方依赖与许可
 
+**本仓库不包含**下列组件的二进制或数据，需要自行获取（见「快速开始」）。
+
 | 组件 | 用途 | 许可 |
 |---|---|---|
-| [librime](https://github.com/rime/librime) | 中文输入引擎 | BSD-3-Clause |
-| [Rime 词典数据](https://github.com/rime/rime-data) | `luna_pinyin` 方案 | 见各数据文件自身声明 |
+| [librime](https://github.com/rime/librime) | 中文输入引擎 | **BSD-3-Clause** — `Copyright (c) 2014, RIME Developers` |
+| [rime-luna-pinyin](https://github.com/rime/rime-luna-pinyin) | `luna_pinyin` 方案与词典 | **LGPL-3.0** |
+| [rime-essay](https://github.com/rime/rime-essay) | 语言模型 `essay.txt` | **LGPL-3.0** |
+| [rime-stroke](https://github.com/rime/rime-stroke) | 笔画反查方案 | **LGPL-3.0** |
+| [rime-prelude](https://github.com/rime/rime-prelude) | `default.yaml` 等预置配置 | **LGPL-3.0** |
+| [OpenCC](https://github.com/BYVoid/OpenCC) | 简繁转换数据 | **Apache-2.0** |
 | GDI+ | 候选窗绘制 | Windows 系统组件 |
 
-**本项目不包含上述组件的二进制或数据**，需要自行获取。
-本项目自身的代码以根目录 `LICENSE` 为准。
+本项目自身的代码以根目录 [`LICENSE`](LICENSE)（MIT）为准。
+
+### ⚠️ 分发二进制时请注意
+
+`MeowIME_Setup.exe` 里**打包了** librime 的二进制和上述 Rime 数据，因此：
+
+- **BSD-3-Clause** 要求二进制分发时附带版权声明、条件列表和免责声明
+- **LGPL-3.0** 要求附带许可证全文，并提供对应源码的获取途径
+
+仓库根目录的 [`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt) 和 [`licenses/`](licenses/) 就是为此准备的，
+`build_installer.ps1` 会自动把它们打进安装包，安装后释放到安装目录。
+
+自己打包分发时**不要删掉这些文件**。
 
 ---
 
