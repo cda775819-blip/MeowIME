@@ -1,5 +1,19 @@
 # 喵喵输入法 · MeowIME
 
+## ⬇️ [**点这里下载安装包**](https://github.com/cda775819-blip/MeowIME/releases/latest/download/MeowIME_Setup.exe)
+
+**39.8 MB · Windows 10 / 11 (x64) · 安装时右键选「以管理员身份运行」**
+
+> ⚠️ 首次运行会被 SmartScreen 拦住（「Windows 已保护你的电脑」）——安装包没有代码签名证书。
+> 点「**更多信息**」→「**仍要运行**」即可，这是未签名分发的常态，不是文件有问题。
+
+也可以到 [**Releases 页面**](https://github.com/cda775819-blip/MeowIME/releases/latest) 看更新日志。
+链接指向 `releases/latest`，**永远是最新版**，不用改。
+
+安装步骤、卸载方法见下面的 [安装](#安装普通用户)。
+
+---
+
 一个**真正的 Windows 输入法**，把中文句子在句末改写成喵喵风格：`我爱你。` → `本喵爱你喵。 (^ω^ฅ)`
 
 > 走的是 **TSF（Text Services Framework）** 正规路线——注册成 COM 进程内文本服务（TIP），
@@ -48,7 +62,25 @@
 
 ---
 
-## 快速开始
+## 安装（普通用户）
+
+1. 下载 [**MeowIME_Setup.exe**](https://github.com/cda775819-blip/MeowIME/releases/latest/download/MeowIME_Setup.exe)
+2. **右键 → 以管理员身份运行**（要写 HKLM 的输入法注册项）
+3. 装完打开 **设置 → 时间和语言 → 语言和区域 → 中文(简体) → 添加键盘**，选中「喵喵助手」
+4. 用 `Win + Space` 切换
+
+| | |
+|---|---|
+| 安装位置 | `%LOCALAPPDATA%\Programs\MeowIME` |
+| 卸载 | `MeowIME_Setup.exe /u`（同一个安装包加 `/u` 参数） |
+| 升级 | 关掉正在用输入法的程序（聊天软件、浏览器、资源管理器）后再装，或先注销一次最干净 |
+
+> 卸载时如果还有程序在用这个输入法，DLL 被锁着删不掉是正常的，
+> 注销一次手动删掉安装目录即可。注册项在卸载时已经清掉了。
+
+---
+
+## 从源码构建（开发者）
 
 ### 环境要求
 
