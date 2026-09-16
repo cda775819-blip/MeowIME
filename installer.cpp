@@ -162,7 +162,45 @@ static HRESULT RegisterDll(const std::wstring& dllPath, bool unregister)
 // 重启输入服务（结束 TextInputHost，系统会自动拉起，刷新 TSF 输入法列表）
 static void RestartInputHost()
 {
-    system("taskkill /F /IM TextInputHost.exe >nul 2>&1");
+    // 用 CreateProcess + CREATE_NO_WINDOW，不要用 system()：
+    // 那在 GUI 程序里会闪一下黑框，很廉价。
+    wchar_t cmd[] = L"taskkill /F /IM TextInputHost.exe";
+    STARTUPINFOW si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&pi, sizeof(pi));
+    if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+    {
+        WaitForSingleObject(pi.hProcess, 3000);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
+}
+
+// 反注册时得知道 DLL 到底叫什么名字。
+// 安装时如果 CatTextService.dll 被占用，会换成 CatTextService.N.dll
+// （见 ExtractWithFallback），所以这里不能死认 CatTextService.dll ——
+// 否则卸载会加载失败、CLSID 反注册不掉，留下一个指向已删除文件的孤儿项，
+// 用户会在输入法列表里看到一个点不动的「喵喵助手」。
+static int UnregisterAllInstalledDlls()
+{
+    int done = 0;
+    const std::wstring base = g_installDir + L"\\CatTextService";
+
+    std::wstring cand = base + L".dll";
+    if (GetFileAttributesW(cand.c_str()) != INVALID_FILE_ATTRIBUTES)
+        if (SUCCEEDED(RegisterDll(cand, true))) done++;
+
+    for (int i = 1; i <= 8; i++)
+    {
+        wchar_t suffix[16];
+        swprintf_s(suffix, L".%d.dll", i);
+        cand = base + suffix;
+        if (GetFileAttributesW(cand.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+        if (SUCCEEDED(RegisterDll(cand, true))) done++;
+    }
+    return done;
 }
 
 // 删除安装目录（best effort）
@@ -200,16 +238,34 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 
     if (uninstall)
     {
-        // 反注册 -> 重启输入服务释放占用 -> 删除文件
-        HRESULT hr = RegisterDll(g_installDir + L"\\CatTextService.dll", true);
+        // 卸载顺序很重要：先反注册（趁 DLL 还在），再删文件。
+        // 找到一个就反注册一个，不认死文件名。
+        const int unregistered = UnregisterAllInstalledDlls();
+
         RestartInputHost();
         Sleep(1200);
         DeleteInstallDir();
 
-        if (SUCCEEDED(hr))
-            MessageBoxW(NULL, L"喵喵助手已卸载完成。", L"喵喵助手", MB_OK | MB_ICONINFORMATION);
+        if (unregistered == 0)
+        {
+            // 连一个 DLL 都没加载成功（比如已经被手动删了），
+            // 但注册项可能还在，所以还是提示一下
+            std::wstring msg = L"没有在安装目录里找到可反注册的 DLL。\n\n"
+                               L"如果输入法列表里还残留「喵喵助手」，"
+                               L"说明注册项没清干净，可以重启后重试，"
+                               L"或手动删除以下注册表项：\n"
+                               L"HKCU\\SOFTWARE\\Microsoft\\CTF\\TIP\\"
+                               L"{1F8A3C21-5B7E-4A2D-9E3F-4C8B1D2E7A5F}";
+            MessageBoxW(NULL, msg.c_str(), L"喵喵助手", MB_OK | MB_ICONWARNING);
+        }
         else
-            MessageBoxW(NULL, L"反注册失败，部分文件可能已删除。\n可尝试重启后重试。", L"喵喵助手", MB_OK | MB_ICONWARNING);
+        {
+            std::wstring msg = L"喵喵助手已卸载完成。\n\n"
+                               L"如果安装目录里还有残留文件，是因为当时仍有程序"
+                               L"在用这个输入法（DLL 被锁着删不掉）。\n"
+                               L"注销一次后手动删掉该目录即可：\n" + g_installDir;
+            MessageBoxW(NULL, msg.c_str(), L"喵喵助手", MB_OK | MB_ICONINFORMATION);
+        }
         return 0;
     }
 
