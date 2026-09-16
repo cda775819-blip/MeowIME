@@ -1,0 +1,12 @@
+# 统一换行符，避免 Windows / Linux 来回提交时整文件 diff
+* text=auto
+
+*.ps1  text eol=crlf
+*.cpp  text eol=crlf
+*.h    text eol=crlf
+*.def  text eol=crlf
+*.md   text eol=lf
+
+*.png  binary
+*.dll  binary
+*.exe  binary
