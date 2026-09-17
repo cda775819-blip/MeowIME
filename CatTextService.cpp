@@ -47,7 +47,7 @@ static RimeSessionId  g_session = 0;
 static bool           g_rimeReady = false;
 static bool           g_csReady = false;
 static int            g_rimeFailCount = 0;   // 初始化失败次数，够了就进入退避
-static DWORD          g_rimeRetryAt = 0;     // 到点之后才允许再试一次
+static ULONGLONG      g_rimeRetryAt = 0;     // 到点之后才允许再试一次（GetTickCount64，不受 49 天回绕影响）
 static CRITICAL_SECTION g_rimeCs;
 static std::string    g_sharedDir;
 static std::string    g_userDir;
@@ -67,7 +67,7 @@ static void NoteRimeFailure()
 {
     g_rimeFailCount++;
     if (g_rimeFailCount >= kRimeMaxRetry)
-        g_rimeRetryAt = GetTickCount() + kRimeRetryDelay;
+        g_rimeRetryAt = GetTickCount64() + kRimeRetryDelay;
 }
 
 // 累积原文的长度上限。DoTransform 回读校验用的是 1024 字缓冲，超过这个数
@@ -174,7 +174,7 @@ static bool EnsureRime()
     EnterCriticalSection(&g_rimeCs);
 
     // 退避期内直接放行按键，不再尝试初始化
-    if (g_rimeRetryAt != 0 && (LONG)(GetTickCount() - g_rimeRetryAt) < 0)
+    if (g_rimeRetryAt != 0 && GetTickCount64() < g_rimeRetryAt)
     {
         LeaveCriticalSection(&g_rimeCs);
         return false;
@@ -291,8 +291,18 @@ static bool VkToRimeKey(WPARAM vk, LPARAM lParam, int& keycode, int& mask)
     }
 
     // 其它可打印键：交给 ToUnicodeEx 按当前布局取字符（清除 Ctrl/Alt，保留 Shift）
+    //
+    // 这里不能忽略 GetKeyboardState 的返回值（静态分析 C6031）：它失败时
+    // keyState 会保持全零，ToUnicodeEx 于是按"没按 Shift"翻译 ——
+    // 结果 Shift+1 得到 '1' 而不是 '!'，Shift+/ 得到 '/' 而不是 '?'，
+    // 感叹号和问号就又打不出来了（正是之前修过的那条路）。
+    // 所以无论如何都用 GetKeyState 把修饰键补齐，不依赖 GetKeyboardState 成功。
     BYTE keyState[256] = { 0 };
-    GetKeyboardState(keyState);
+    if (!GetKeyboardState(keyState))
+        ZeroMemory(keyState, sizeof(keyState));
+
+    keyState[VK_SHIFT]   = (BYTE)((GetKeyState(VK_SHIFT)   & 0x8000) ? 0x80 : 0);
+    keyState[VK_CAPITAL] = (BYTE)((GetKeyState(VK_CAPITAL) & 0x0001) ? 0x01 : 0);
     keyState[VK_CONTROL] = 0;
     keyState[VK_MENU] = 0;
     WCHAR buf[4] = { 0 };
@@ -883,7 +893,7 @@ static std::wstring AddMeowW(const std::wstring& text, const std::wstring& suffi
 static std::wstring GetRandomEmoticonW()
 {
     static bool seeded = false;
-    if (!seeded) { srand((unsigned)GetTickCount()); seeded = true; }
+    if (!seeded) { srand((unsigned)GetTickCount64()); seeded = true; }
     size_t n = sizeof(kEmoticons) / sizeof(kEmoticons[0]);
     if (n == 0) return L"";
     return kEmoticons[rand() % n];
@@ -1072,6 +1082,7 @@ public:
     // ---- ITfCompositionSink ----
     STDMETHODIMP OnCompositionTerminated(TfEditCookie ecWrite, ITfComposition* pComposition)
     {
+        UNREFERENCED_PARAMETER(ecWrite);   // 接口要求有，但这里用不上（不写文档）
         if (m_pComposition == pComposition)
         {
             m_pComposition->Release();
