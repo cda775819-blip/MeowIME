@@ -101,6 +101,10 @@ static void DbgLog(const wchar_t* fmt, ...)
     }
     if (!g_pLog) return;
 
+    // 带上进程号：输入法会被加载进十几个进程，它们写同一个日志文件，
+    // 没有 PID 根本分不清哪一行是哪个程序写的（排查时吃过这个亏）。
+    fwprintf(g_pLog, L"[%-6u] ", (unsigned)GetCurrentProcessId());
+
     va_list ap;
     va_start(ap, fmt);
     vfwprintf_s(g_pLog, fmt, ap);
@@ -1172,6 +1176,47 @@ public:
         }
 
         DbgLog(L"[Life] Activate 完成，已挂上键盘事件接收器");
+
+        // 决定性探针：问系统「当前活动的键盘输入法到底是哪一个」。
+        //
+        // 这一步能区分两种完全不同的故障：
+        //   · 系统说活动的是别人 → 我们压根没被选上（注册/选择问题）
+        //   · 系统说活动的就是我们 → 选上了但按键不路由（路由问题）
+        // 之前排查卡住就是因为没有这一条，只能靠"组字计数"间接猜。
+        {
+            static const CLSID kProfilesId =
+                { 0x33C53A50, 0xF456, 0x4884, { 0xB0,0x49,0x85,0xFD,0x64,0x3E,0xCF,0xED } };
+            static const GUID kCatKeyboard =
+                { 0x34745C63, 0xB2F0, 0x4784, { 0x8B,0x67,0x5E,0x12,0xC8,0x70,0x1A,0x31 } };
+
+            ITfInputProcessorProfiles* pProfiles = NULL;
+            HRESULT hrP = CoCreateInstance(kProfilesId, NULL, CLSCTX_INPROC_SERVER,
+                                           __uuidof(ITfInputProcessorProfiles), (void**)&pProfiles);
+            DbgLog(L"[Life] CoCreateInstance(ProfileMgr) hr=0x%08X", (int)hrP);
+            if (SUCCEEDED(hrP) && pProfiles)
+            {
+                LANGID lang = 0;
+                if (SUCCEEDED(pProfiles->GetCurrentLanguage(&lang)))
+                    DbgLog(L"[Life] 当前语言 LANGID=0x%04X", (unsigned)lang);
+
+                ITfInputProcessorProfileMgr* pMgr = NULL;
+                if (SUCCEEDED(pProfiles->QueryInterface(__uuidof(ITfInputProcessorProfileMgr),
+                                                        (void**)&pMgr)) && pMgr)
+                {
+                    TF_INPUTPROCESSORPROFILE ip;
+                    ZeroMemory(&ip, sizeof(ip));
+                    HRESULT hrA = pMgr->GetActiveProfile(kCatKeyboard, &ip);
+                    DbgLog(L"[Life] GetActiveProfile hr=0x%08X  活动输入法 clsid={%08X-...} langid=0x%04X profile={%08X-...}",
+                           (int)hrA, (unsigned)ip.clsid.Data1, (unsigned)ip.langid,
+                           (unsigned)ip.guidProfile.Data1);
+                    // 我们自己的 CLSID 是 1F8A3C21 —— 对不上就说明没被选上
+                    DbgLog(L"[Life] >>> 当前键盘%s喵喵助手 <<<",
+                           (ip.clsid.Data1 == 0x1F8A3C21) ? L"就是" : L"不是");
+                    pMgr->Release();
+                }
+                pProfiles->Release();
+            }
+        }
         return S_OK;
     }
 
