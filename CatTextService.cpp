@@ -92,6 +92,36 @@ static const size_t kMaxSessionOriginal = 900;
 static FILE* g_pLog = NULL;
 static bool  g_logChecked = false;
 
+static void DbgLog(const wchar_t* fmt, ...);   // 前置声明：下面那个探针要用
+
+// 检查自己有没有「来自互联网」标记（Mark-of-the-Web / Zone.Identifier 备用数据流）。
+//
+// 为什么查这个：作者机上的 DLL 是本地编译的（没有标记），而下载来的包解压后
+// 可能带着标记。Windows 对带标记的文件有一整套额外的信任限制，而「输入法能被
+// 实例化、能被 Activate，系统却拒绝把它选成当前键盘」这种表现，正是信任判定
+// 拦在最后一步的样子。这一条能让日志自己回答，不用再猜。
+static void DbgLogTrustState()
+{
+    wchar_t modPath[MAX_PATH] = { 0 };
+    GetModuleFileNameW(g_hInst, modPath, MAX_PATH);
+
+    std::wstring ads = std::wstring(modPath) + L":Zone.Identifier";
+    HANDLE h = CreateFileW(ads.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        DbgLog(L"[Trust] 本 DLL 没有 Zone.Identifier（未被标记为来自互联网）");
+        return;
+    }
+    char buf[512] = { 0 };
+    DWORD rd = 0;
+    ReadFile(h, buf, sizeof(buf) - 1, &rd, NULL);
+    CloseHandle(h);
+    for (DWORD i = 0; i < rd; i++) if (buf[i] == '\r' || buf[i] == '\n') buf[i] = ' ';
+    DbgLog(L"[Trust] ★ 本 DLL 带 Zone.Identifier（来自互联网标记）: %hs", buf);
+    DbgLog(L"[Trust] 若怀疑是这个原因，可对该文件执行 Unblock-File 后重试");
+}
+
 static void DbgLog(const wchar_t* fmt, ...)
 {
     if (!g_logChecked)
@@ -106,10 +136,16 @@ static void DbgLog(const wchar_t* fmt, ...)
             g_pLog = _wfsopen(path.c_str(), L"a, ccs=UTF-8", _SH_DENYNO);
             if (g_pLog)
             {
-                // 每个进程第一次写日志时打一条构建标识，方便确认加载的到底是哪一版
-                fwprintf(g_pLog, L"\n----- pid %u 加载 %sDLL（编译于 %s）-----\n",
-                         (unsigned)GetCurrentProcessId(), g_dllDir.c_str(), MEOW_BUILD_STAMP);
+                // 每个进程第一次写日志时打一条构建标识，方便确认加载的到底是哪一版。
+                // 注意要打「完整文件路径」而不是 g_dllDir —— 后者是目录，
+                // 拼上 "DLL" 会打出 `...\MeowIME\DLL` 这种没有文件名的东西
+                // （这个 bug 是看报告的人发现的）。
+                wchar_t modPath[MAX_PATH] = { 0 };
+                GetModuleFileNameW(g_hInst, modPath, MAX_PATH);
+                fwprintf(g_pLog, L"\n----- pid %u 加载 %s（编译于 %s）-----\n",
+                         (unsigned)GetCurrentProcessId(), modPath, MEOW_BUILD_STAMP);
                 fflush(g_pLog);
+                DbgLogTrustState();
             }
         }
     }
