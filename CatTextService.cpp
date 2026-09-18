@@ -1013,8 +1013,20 @@ static void AppendOriginalW(std::wstring& s, wchar_t c)
 }
 
 // ---------------- 文本服务类 ----------------
+//
+// 基类用 ITfTextInputProcessorEx（它派生自 ITfTextInputProcessor），不是旧的那个。
+// 原因来自一份实机日志：msctf 拿到我们创建的对象后，第一件事就是
+//
+//     QI 拒绝（未实现）: {6E4E2102-F9CD-433D-B496-303CE03A6507}   ← 正是 ITfTextInputProcessorEx
+//     Activate 进入 ...
+//     AdviseKeyEventSink hr=0x00000000                             ← 接收器挂上了
+//     但按键一个都没进来，全部由系统自带输入法处理
+//
+// 也就是说：接收器挂得上，TIP 却始终没成为「当前键盘」。只实现旧接口的 TIP
+// 在新版 Windows 上可能不再参与键盘路由。补上 Ex 只是多一个 ActivateEx 方法，
+// 对能正常工作的系统完全没有影响（ActivateEx 直接转调 Activate）。
 class CCatTextService :
-    public ITfTextInputProcessor,
+    public ITfTextInputProcessorEx,
     public ITfKeyEventSink,
     public ITfEditSession,
     public ITfCompositionSink
@@ -1068,8 +1080,10 @@ public:
     {
         if (!ppvObj) return E_INVALIDARG;
         *ppvObj = NULL;
-        if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, __uuidof(ITfTextInputProcessor)))
-            *ppvObj = static_cast<ITfTextInputProcessor*>(this);
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, __uuidof(ITfTextInputProcessorEx)) ||
+            IsEqualIID(riid, __uuidof(ITfTextInputProcessor)))
+            *ppvObj = static_cast<ITfTextInputProcessorEx*>(this);
         else if (IsEqualIID(riid, __uuidof(ITfKeyEventSink)))
             *ppvObj = static_cast<ITfKeyEventSink*>(this);
         else if (IsEqualIID(riid, __uuidof(ITfEditSession)))
@@ -1190,6 +1204,15 @@ public:
         }
         m_tfClientId = (TfClientId)0;
         return S_OK;
+    }
+
+    // ---- ITfTextInputProcessorEx ----
+    // msctf 会优先要这个接口。我们不用 dwFlags 里的额外信息，
+    // 按文档的做法直接转调 Activate 即可。
+    STDMETHODIMP ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD dwFlags)
+    {
+        DbgLog(L"[Life] ActivateEx dwFlags=0x%08X", (unsigned)dwFlags);
+        return Activate(ptim, tid);
     }
 
     // ---- 处理一次按键：返回是否被 Rime 吃掉 ----
