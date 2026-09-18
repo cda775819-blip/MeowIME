@@ -82,6 +82,13 @@ static const size_t kMaxSessionOriginal = 900;
 // 没有它就是彻底的空操作（每次按键只多一次 bool 判断）。
 // 这样不用改代码重编译就能开关日志，也方便确认手上这个 DLL 到底是哪一版。
 // 注意：日志里包含你打的字，排查完记得把 CatTextService.debug 删掉。
+// 构建标识：由编译时的 __DATE__/__TIME__ 生成。
+// 为什么需要它：这个 DLL 没有版本资源，19 个历史构建长得一模一样，
+// "手上这个文件到底是不是我刚编的那版"完全无从判断——排查时为此浪费过时间
+// （包里一个 271872 字节、_build 里一个同样 271872 字节，哈希却不同）。
+// 现在日志开头会打印编译时间和 DLL 路径，一眼就能对上。
+#define MEOW_BUILD_STAMP L"" __DATE__ L" " __TIME__
+
 static FILE* g_pLog = NULL;
 static bool  g_logChecked = false;
 
@@ -97,6 +104,13 @@ static void DbgLog(const wchar_t* fmt, ...)
             // 必须用 _wfsopen 显式 _SH_DENYNO：默认的独占式打开会让排查时
             // 连日志都读不出来（另一个进程正拿着这个文件）。
             g_pLog = _wfsopen(path.c_str(), L"a, ccs=UTF-8", _SH_DENYNO);
+            if (g_pLog)
+            {
+                // 每个进程第一次写日志时打一条构建标识，方便确认加载的到底是哪一版
+                fwprintf(g_pLog, L"\n----- pid %u 加载 %sDLL（编译于 %s）-----\n",
+                         (unsigned)GetCurrentProcessId(), g_dllDir.c_str(), MEOW_BUILD_STAMP);
+                fflush(g_pLog);
+            }
         }
     }
     if (!g_pLog) return;

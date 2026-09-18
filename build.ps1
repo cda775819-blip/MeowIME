@@ -37,12 +37,54 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $vs = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
 if (-not (Test-Path $vs)) { throw "找不到 vcvars64.bat：$vs" }
 
+# ---------- 1a. 生成版本资源并编进 DLL ----------
+# 为什么必须做：这个 DLL 以前没有任何版本信息，19 个历史构建文件长得一模一样，
+# "手上这个文件到底是哪一版"只能靠算哈希 —— 排查时为此白费过时间。
+# 现在右键看属性就能确认；构建号用时间戳，保证每次编译都不同。
+$rcFile  = Join-Path $outDir 'version.rc'
+$resFile = Join-Path $outDir 'version.res'
+$buildId = (Get-Date -Format 'yyyyMMdd.HHmm')
+$stamp   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+$rcText = @"
+1 VERSIONINFO
+FILEVERSION 0,1,3,0
+PRODUCTVERSION 0,1,3,0
+FILEOS 0x40004L
+FILETYPE 0x2L
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "080404b0"
+    BEGIN
+      VALUE "CompanyName",      "MeowIME Contributors"
+      VALUE "FileDescription",  "喵喵输入法 TSF 文本服务"
+      VALUE "FileVersion",      "0.1.3.0"
+      VALUE "InternalName",     "CatTextService"
+      VALUE "LegalCopyright",   "MIT License"
+      VALUE "OriginalFilename", "CatTextService.dll"
+      VALUE "ProductName",      "喵喵输入法 (MeowIME)"
+      VALUE "ProductVersion",   "0.1.3.0"
+      VALUE "Comments",         "build $buildId ($stamp)"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x804, 1200
+  END
+END
+"@
+[System.IO.File]::WriteAllText($rcFile, $rcText, (New-Object System.Text.UTF8Encoding($false)))
+# /c65001 不能省：.rc 是 UTF-8 且含中文，rc.exe 默认按系统 ANSI 代码页读会乱码
+cmd /c ('call "' + $vs + '" >nul && rc.exe /nologo /c65001 /fo "' + $resFile + '" "' + $rcFile + '"')
+if ($LASTEXITCODE -ne 0) { throw "版本资源编译失败" }
+Write-Host "[1a] 版本资源已生成（build $buildId）" -ForegroundColor Gray
+
 # /MT 静态链接 CRT —— 必须。否则会依赖 MSVCP140.dll / VCRUNTIME140.dll，
 # 在没装 VC++ 运行库的机器上 DLL 根本加载不了。
 $cmd = 'call "' + $vs + '" >nul && cd /d "' + $outDir + '" && ' +
        'cl.exe /nologo /LD /MT /EHsc /utf-8 /W3 ' +
        '/I"' + $root + '\rime_dl\rime\dist\include" ' +
-       '"' + $root + '\CatTextService.cpp" /Fe:"' + $outDll + '" ' +
+       '"' + $root + '\CatTextService.cpp" "' + $resFile + '" /Fe:"' + $outDll + '" ' +
        '/link /DEF:"' + $root + '\CatTextService.def" ' +
        'ole32.lib oleaut32.lib uuid.lib user32.lib advapi32.lib gdi32.lib'
 cmd /c $cmd
