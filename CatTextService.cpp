@@ -110,13 +110,26 @@ static void DbgLogTrustState()
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE)
     {
-        DbgLog(L"[Trust] 本 DLL 没有 Zone.Identifier（未被标记为来自互联网）");
+        // 必须区分「确实没有这个数据流」和「打不开」。查这个的原因之一就是
+        // 怀疑有安全软件在拦，而安全软件拦文件访问时给的正是 ACCESS_DENIED——
+        // 要是把它也报成「没有标记」，就会用一个假的阴性结论误导排查。
+        DWORD err = GetLastError();
+        if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+            DbgLog(L"[Trust] 本 DLL 没有 Zone.Identifier（未被标记为来自互联网）");
+        else
+            DbgLog(L"[Trust] 无法确认标记状态：打开 Zone.Identifier 失败，错误码 %lu"
+                   L"（5=拒绝访问，可能有安全软件在拦；这种情况下结论不可信）", err);
         return;
     }
     char buf[512] = { 0 };
     DWORD rd = 0;
-    ReadFile(h, buf, sizeof(buf) - 1, &rd, NULL);
+    BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &rd, NULL);
     CloseHandle(h);
+    if (!ok || rd == 0)
+    {
+        DbgLog(L"[Trust] Zone.Identifier 存在但读不出内容（错误码 %lu）", GetLastError());
+        return;
+    }
     for (DWORD i = 0; i < rd; i++) if (buf[i] == '\r' || buf[i] == '\n') buf[i] = ' ';
     DbgLog(L"[Trust] ★ 本 DLL 带 Zone.Identifier（来自互联网标记）: %hs", buf);
     DbgLog(L"[Trust] 若怀疑是这个原因，可对该文件执行 Unblock-File 后重试");
