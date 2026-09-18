@@ -144,6 +144,15 @@ enum
 };
 
 // ---------------- UTF-8 <-> UTF-16 ----------------
+// 把 GUID 转成可读字符串，日志用
+static void GuidToStr(const GUID& g, wchar_t* out, size_t cch)
+{
+    swprintf_s(out, cch, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+        (unsigned)g.Data1, (unsigned)g.Data2, (unsigned)g.Data3,
+        g.Data4[0], g.Data4[1], g.Data4[2], g.Data4[3],
+        g.Data4[4], g.Data4[5], g.Data4[6], g.Data4[7]);
+}
+
 static std::wstring Utf8ToWide(const std::string& s)
 {
     if (s.empty()) return L"";
@@ -1051,6 +1060,7 @@ public:
         m_candSel(0), m_pendingTransform(false), m_hasCaret(false)
     {
         ZeroMemory(&m_caretRect, sizeof(m_caretRect));
+        DbgLog(L"[Life] 文本服务对象已创建");
     }
 
     // ---- IUnknown ----
@@ -1067,7 +1077,15 @@ public:
         else if (IsEqualIID(riid, __uuidof(ITfCompositionSink)))
             *ppvObj = static_cast<ITfCompositionSink*>(this);
         else
+        {
+            // 记录"谁问了我们没实现的接口"。CTF 想用某个接口而拿不到时，
+            // 可能会安静地放弃整个 TIP —— 从外面看起来就是"装上了但切不过去"。
+            // 这行日志能立刻区分"它压根没问"和"它问了但我们没有"。
+            wchar_t g[64];
+            GuidToStr(riid, g, 64);
+            DbgLog(L"[Life] QI 拒绝（未实现）: %s", g);
             return E_NOINTERFACE;
+        }
         AddRef();
         return S_OK;
     }
@@ -1098,13 +1116,37 @@ public:
         m_pThreadMgr->AddRef();
         m_tfClientId = tfClientId;
 
-        if (SUCCEEDED(pThreadMgr->QueryInterface(__uuidof(ITfKeystrokeMgr), (void**)&m_pKeyMgr)) && m_pKeyMgr)
+        // 生命周期探针。之前这里一行日志都没有，导致"根本没收过键"和
+        // "收到了但提前返回"从外部完全无法区分 —— 有人拿着 DLL 被加载进
+        // 十几个进程、组字计数为 0 的证据也判断不出卡在哪一步。现在每一步都留痕。
+        DbgLog(L"[Life] Activate 进入 tid=%u", (unsigned)tfClientId);
+
+        m_pKeyMgr = NULL;
+        HRESULT hrQi = pThreadMgr->QueryInterface(__uuidof(ITfKeystrokeMgr), (void**)&m_pKeyMgr);
+        DbgLog(L"[Life] QI(ITfKeystrokeMgr) hr=0x%08X p=%p", (int)hrQi, m_pKeyMgr);
+        if (FAILED(hrQi) || !m_pKeyMgr)
         {
-            m_pKeyMgr->AdviseKeyEventSink(m_tfClientId, static_cast<ITfKeyEventSink*>(this), TRUE);
+            // 拿不到键盘管理器就永远收不到键，静默失败是最糟的结果：外部只看到
+            // "输入法装上了但打不出字"。如实返回失败，让 CTF 和排查工具能看出来。
+            DbgLog(L"[Life] 致命：拿不到 ITfKeystrokeMgr，按键永远进不来");
+            return E_FAIL;
+        }
+
+        HRESULT hrAdvise = m_pKeyMgr->AdviseKeyEventSink(
+            m_tfClientId, static_cast<ITfKeyEventSink*>(this), TRUE);
+        DbgLog(L"[Life] AdviseKeyEventSink hr=0x%08X", (int)hrAdvise);
+        if (FAILED(hrAdvise))
+        {
+            DbgLog(L"[Life] 致命：AdviseKeyEventSink 失败，按键永远进不来");
+            m_pKeyMgr->Release();
+            m_pKeyMgr = NULL;
+            return E_FAIL;
         }
 
         ITfDocumentMgr* pDocMgr = NULL;
-        if (SUCCEEDED(pThreadMgr->GetFocus(&pDocMgr)) && pDocMgr)
+        HRESULT hrFocus = pThreadMgr->GetFocus(&pDocMgr);
+        DbgLog(L"[Life] GetFocus hr=0x%08X p=%p", (int)hrFocus, pDocMgr);
+        if (SUCCEEDED(hrFocus) && pDocMgr)
         {
             ITfContext* pContext = NULL;
             if (SUCCEEDED(pDocMgr->GetTop(&pContext)) && pContext)
@@ -1114,11 +1156,14 @@ public:
             }
             pDocMgr->Release();
         }
+
+        DbgLog(L"[Life] Activate 完成，已挂上键盘事件接收器");
         return S_OK;
     }
 
     STDMETHODIMP Deactivate()
     {
+        DbgLog(L"[Life] Deactivate");
         if (m_pKeyMgr)
         {
             m_pKeyMgr->UnadviseKeyEventSink(m_tfClientId);
@@ -1150,14 +1195,28 @@ public:
     // ---- 处理一次按键：返回是否被 Rime 吃掉 ----
     bool ProcessKey(ITfContext* pic, WPARAM wParam, LPARAM lParam)
     {
+        // 入口就留痕：这样即使后面在任何一条提前返回上退出，也能看出"键确实到了"。
+        // 排查"完全打不出字"时，这里有没有输出就是分水岭。
+        DbgLog(L"[Key] 进入 ProcessKey vk=0x%02X ctx=%p", (int)wParam, pic);
+
         if (m_pContext != pic)
         {
             if (pic) pic->AddRef();
             if (m_pContext) m_pContext->Release();
             m_pContext = pic;
         }
-        if (!m_pContext) return false;
-        if (!EnsureRime()) return false;
+        if (!m_pContext)
+        {
+            // 宿主给了个空 context（某些程序会这样）。以前这里是静默 return，
+            // 结果表现为"键好像根本没进来" —— 必须记下来。
+            DbgLog(L"[Key] 提前返回：context 为空");
+            return false;
+        }
+        if (!EnsureRime())
+        {
+            DbgLog(L"[Key] 提前返回：Rime 引擎未就绪（按键将原样透传）");
+            return false;
+        }
 
         // 新的一次按下，允许这个键的抬起再被转发一次
         m_lastUpForwarded = 0;
@@ -1323,7 +1382,11 @@ public:
     // 低内存时会抛 bad_alloc；异常穿过 COM 边界是未定义行为，最坏直接
     // 带走宿主进程 —— 而这是个 in-proc DLL，宿主就是用户的 QQ/浏览器。
     // 所以一律兜住，出错时按「不吃这个键」处理：用户至少还能打出原始字符。
-    STDMETHODIMP OnSetFocus(BOOL) { return S_OK; }
+    STDMETHODIMP OnSetFocus(BOOL fForeground)
+    {
+        DbgLog(L"[Life] OnSetFocus fg=%d", (int)fForeground);
+        return S_OK;
+    }
 
     STDMETHODIMP OnTestKeyDown(ITfContext* pic, WPARAM wParam, LPARAM lParam, BOOL* pfEaten)
     {
@@ -1695,6 +1758,9 @@ public:
             CCatTextService* p = new CCatTextService();
             HRESULT hr = p->QueryInterface(riid, ppv);
             p->Release();
+            // 关键：CTF 经常先问 ITfTextInputProcessorEx，再退回 ITfTextInputProcessor。
+            // 如果它问的接口我们一个都没有，对象会当场被丢掉、Activate 永远不会来。
+            DbgLog(L"[Life] CreateInstance hr=0x%08X", (int)hr);
             return hr;
         }
         catch (...)
@@ -1758,6 +1824,11 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void** ppv)
     if (!IsEqualCLSID(rclsid, CLSID_CatTextService)) return CLASS_E_CLASSNOTAVAILABLE;
     if (!ppv) return E_INVALIDARG;
     *ppv = NULL;
+    // 这条日志是"DLL 到底跑起来没有"的第一道探针：
+    // msctf 加载 DLL 之后必然先调 DllGetClassObject。只要调试开关开着，
+    // 看到这行就说明 DLL 真的在执行；看不到就说明加载的根本不是这个文件。
+    DbgLog(L"[Life] DllGetClassObject 被调用（riid=%08X-%04X-...）",
+           (unsigned)riid.Data1, (unsigned)riid.Data2);
     try
     {
         CCatClassFactory* p = new CCatClassFactory();

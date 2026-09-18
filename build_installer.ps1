@@ -50,8 +50,8 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 # 也更容易起疑。改版本号改这里 + installer.cpp 无关。
 [void]$rc.AppendLine(@"
 1 VERSIONINFO
-FILEVERSION 0,1,1,0
-PRODUCTVERSION 0,1,1,0
+FILEVERSION 0,1,2,0
+PRODUCTVERSION 0,1,2,0
 FILEOS 0x40004L
 FILETYPE 0x1L
 BEGIN
@@ -61,12 +61,12 @@ BEGIN
     BEGIN
       VALUE "CompanyName",      "MeowIME Contributors"
       VALUE "FileDescription",  "喵喵输入法 安装程序 (MeowIME Setup)"
-      VALUE "FileVersion",      "0.1.1.0"
+      VALUE "FileVersion",      "0.1.2.0"
       VALUE "InternalName",     "MeowIME_Setup"
       VALUE "LegalCopyright",   "MIT License"
       VALUE "OriginalFilename", "MeowIME_Setup.exe"
       VALUE "ProductName",      "喵喵输入法 (MeowIME)"
-      VALUE "ProductVersion",   "0.1.1.0"
+      VALUE "ProductVersion",   "0.1.2.0"
       VALUE "Comments",         "https://github.com/cda775819-blip/MeowIME"
     END
   END
